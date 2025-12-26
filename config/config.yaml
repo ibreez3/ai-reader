@@ -1,0 +1,8 @@
+server:
+  port: 8080
+openai:
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-plus
+  api_key_env: AIREADER_OPENAI_APIKEY
+output:
+  dir: output

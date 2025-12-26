@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  ai-reader:
+    build:
+      context: .
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+    container_name: ai-reader
+    environment:
+      - AIREADER_OPENAI_APIKEY=${AIREADER_OPENAI_APIKEY}
+    volumes:
+      - ./config/config.yaml:/app/config/config.yaml:ro
+      - ./output:/app/output
+      - ./instruction.txt:/app/instruction.txt:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
