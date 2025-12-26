@@ -8,7 +8,7 @@ ENV GO111MODULE=on
 ENV CGO_ENABLED=0
 
 COPY go.mod go.sum ./
-RUN go mod download || (echo "retry with direct" && go env -w GOPROXY=direct && go mod download)
+RUN go mod download || (echo "retry with direct" && go mod download)
 
 # Copy source
 COPY . .
