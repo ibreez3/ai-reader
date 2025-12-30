@@ -14,6 +14,7 @@ type Generator struct {
 	Client            ChatClient
 	Log               func(string)
 	PersistDir        string
+	FinalBaseDir      string
 	RequestTimeoutSec int
 	RetryCount        int
 	RetryBackoffMs    int
@@ -46,6 +47,11 @@ func (g *Generator) WithRequestPolicy(timeoutSec, retries, backoffMs int) *Gener
 	return g
 }
 
+func (g *Generator) WithFinalBaseDir(dir string) *Generator {
+	g.FinalBaseDir = dir
+	return g
+}
+
 func (g *Generator) Generate(ctx context.Context, spec Spec) (Outline, []Character, []ChapterContent, error) {
 	outline, err := g.generateOutline(ctx, spec)
 	if err != nil {
@@ -53,6 +59,12 @@ func (g *Generator) Generate(ctx context.Context, spec Spec) (Outline, []Charact
 	}
 	if g.PersistDir != "" {
 		_ = persistOutline(g.PersistDir, outline)
+	}
+	// prepare final output dir once outline is known
+	finalDir := ""
+	if g.FinalBaseDir != "" {
+		finalDir = filepath.Join(g.FinalBaseDir, safeDirName(outline.Title))
+		_ = os.MkdirAll(finalDir, 0o755)
 	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
@@ -100,6 +112,12 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 	if g.PersistDir != "" {
 		_ = persistOutline(g.PersistDir, outline)
 	}
+	// prepare final dir
+	finalDir := ""
+	if g.FinalBaseDir != "" {
+		finalDir = filepath.Join(g.FinalBaseDir, safeDirName(outline.Title))
+		_ = os.MkdirAll(finalDir, 0o755)
+	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
@@ -128,6 +146,9 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 		if g.PersistDir != "" {
 			_ = persistChapter(g.PersistDir, outline.Title, c)
 		}
+		if finalDir != "" {
+			_ = writeChapterToDir(finalDir, c)
+		}
 	})
 	if err != nil {
 		return Outline{}, nil, nil, err
@@ -145,6 +166,11 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 func (g *Generator) GenerateFromOutline(ctx context.Context, spec Spec, outline Outline) (Outline, []Character, []ChapterContent, error) {
 	if g.PersistDir != "" {
 		_ = persistOutline(g.PersistDir, outline)
+	}
+	finalDir := ""
+	if g.FinalBaseDir != "" {
+		finalDir = filepath.Join(g.FinalBaseDir, safeDirName(outline.Title))
+		_ = os.MkdirAll(finalDir, 0o755)
 	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
@@ -188,6 +214,11 @@ func (g *Generator) GenerateFromSource(ctx context.Context, spec Spec, source st
 	}
 	if g.PersistDir != "" {
 		_ = persistOutline(g.PersistDir, outline)
+	}
+	finalDir := ""
+	if g.FinalBaseDir != "" {
+		finalDir = filepath.Join(g.FinalBaseDir, safeDirName(outline.Title))
+		_ = os.MkdirAll(finalDir, 0o755)
 	}
 	characters, err := g.parseCharactersFromText(ctx, spec, source, outline)
 	if err != nil {
@@ -446,6 +477,11 @@ func (g *Generator) generateChapterContentsParallelWithCallback(ctx context.Cont
 		contents[i] = ChapterContent{Index: plans[i].Index, Title: plans[i].Title, Content: out}
 		if g.PersistDir != "" {
 			_ = persistChapter(g.PersistDir, canon.Title, contents[i])
+		}
+		if g.FinalBaseDir != "" {
+			finalDir := filepath.Join(g.FinalBaseDir, safeDirName(canon.Title))
+			_ = os.MkdirAll(finalDir, 0o755)
+			_ = writeChapterToDir(finalDir, contents[i])
 		}
 		if onChapter != nil {
 			onChapter(contents[i])
@@ -861,6 +897,17 @@ func persistChapter(dir string, title string, c ChapterContent) error {
 	}
 	fname := fmt.Sprintf("%02d_%s.md", c.Index, safeFileName(c.Title))
 	path := filepath.Join(chapDir, fname)
+	body := strings.Builder{}
+	body.WriteString("# ")
+	body.WriteString(c.Title)
+	body.WriteString("\n\n")
+	body.WriteString(c.Content)
+	return os.WriteFile(path, []byte(body.String()), 0o644)
+}
+
+func writeChapterToDir(finalDir string, c ChapterContent) error {
+	fname := fmt.Sprintf("%02d_%s.md", c.Index, safeFileName(c.Title))
+	path := filepath.Join(finalDir, fname)
 	body := strings.Builder{}
 	body.WriteString("# ")
 	body.WriteString(c.Title)
