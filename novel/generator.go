@@ -456,7 +456,7 @@ func (g *Generator) coherenceAudit(ctx context.Context, spec Spec, canon Canon, 
 		b.WriteString(ch.Content)
 		b.WriteString("\n")
 	}
-	sys := "你是严苛的一致性审查员"
+	sys := "你是严苛的AI问审查员"
 	out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
 	if err != nil {
 		return nil, err
