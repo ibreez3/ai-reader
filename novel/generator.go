@@ -503,7 +503,7 @@ func (g *Generator) coherenceAudit(ctx context.Context, spec Spec, canon Canon, 
 		b.WriteString(ch.Content)
 		b.WriteString("\n")
 	}
-	sys := "你是严苛的AI问审查员"
+	sys := "你是严苛的AI文审查员，负责检查内容是否属于AI生成的"
 	out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
 	if err != nil {
 		return nil, err
@@ -522,7 +522,7 @@ func (g *Generator) applyCoherenceFixes(ctx context.Context, spec Spec, canon Ca
 	}
 	revised := make([]ChapterContent, len(contents))
 	for i := range contents {
-		sys := "你是资深中文小说修订助手"
+		sys := "你是资深中文小说修订助手，负责根据问题将AI生成的内容优化，转成口语化的中文"
 		b := strings.Builder{}
 		b.WriteString("根据问题修订章节内容，保持风格一致并避免新增冲突，只返回修订后的完整正文。\n")
 		b.WriteString("风格：")
