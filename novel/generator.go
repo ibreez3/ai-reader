@@ -12,8 +12,9 @@ import (
 )
 
 type Generator struct {
-	Client *openai.Client
-	Log    func(string)
+	Client     *openai.Client
+	Log        func(string)
+	PersistDir string
 }
 
 func NewGenerator(cli *openai.Client) *Generator {
@@ -25,14 +26,25 @@ func (g *Generator) WithLogger(log func(string)) *Generator {
 	return g
 }
 
+func (g *Generator) WithPersistDir(dir string) *Generator {
+	g.PersistDir = dir
+	return g
+}
+
 func (g *Generator) Generate(ctx context.Context, spec Spec) (Outline, []Character, []ChapterContent, error) {
 	outline, err := g.generateOutline(ctx, spec)
 	if err != nil {
 		return Outline{}, nil, nil, err
 	}
+	if g.PersistDir != "" {
+		_ = persistOutline(g.PersistDir, outline)
+	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistCharacters(g.PersistDir, characters)
 	}
 	if g.Log != nil {
 		for _, c := range characters {
@@ -42,6 +54,9 @@ func (g *Generator) Generate(ctx context.Context, spec Spec) (Outline, []Charact
 	plans, err := g.generateChapterPlans(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistPlans(g.PersistDir, plans)
 	}
 
 	settings, _ := g.generateSettings(ctx, spec)
@@ -67,9 +82,15 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 	if err != nil {
 		return Outline{}, nil, nil, err
 	}
+	if g.PersistDir != "" {
+		_ = persistOutline(g.PersistDir, outline)
+	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistCharacters(g.PersistDir, characters)
 	}
 	if g.Log != nil {
 		for _, c := range characters {
@@ -80,11 +101,17 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 	if err != nil {
 		return Outline{}, nil, nil, err
 	}
+	if g.PersistDir != "" {
+		_ = persistPlans(g.PersistDir, plans)
+	}
 	settings, _ := g.generateSettings(ctx, spec)
 	canon := BuildCanon(spec, outline, characters, settings)
 	contents, err := g.generateChapterContentsParallelWithCallback(ctx, spec, canon, plans, func(c ChapterContent) {
 		if onChapter != nil {
 			onChapter(c.Index, c)
+		}
+		if g.PersistDir != "" {
+			_ = persistChapter(g.PersistDir, outline.Title, c)
 		}
 	})
 	if err != nil {
@@ -101,9 +128,15 @@ func (g *Generator) GenerateWithProgress(ctx context.Context, spec Spec, onChapt
 }
 
 func (g *Generator) GenerateFromOutline(ctx context.Context, spec Spec, outline Outline) (Outline, []Character, []ChapterContent, error) {
+	if g.PersistDir != "" {
+		_ = persistOutline(g.PersistDir, outline)
+	}
 	characters, err := g.generateCharacters(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistCharacters(g.PersistDir, characters)
 	}
 	if g.Log != nil {
 		for _, c := range characters {
@@ -113,6 +146,9 @@ func (g *Generator) GenerateFromOutline(ctx context.Context, spec Spec, outline 
 	plans, err := g.generateChapterPlans(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistPlans(g.PersistDir, plans)
 	}
 	settings, _ := g.generateSettings(ctx, spec)
 	canon := BuildCanon(spec, outline, characters, settings)
@@ -135,15 +171,24 @@ func (g *Generator) GenerateFromSource(ctx context.Context, spec Spec, source st
 	if err != nil {
 		return Outline{}, nil, nil, err
 	}
+	if g.PersistDir != "" {
+		_ = persistOutline(g.PersistDir, outline)
+	}
 	characters, err := g.parseCharactersFromText(ctx, spec, source, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistCharacters(g.PersistDir, characters)
 	}
 	settings, _ := g.generateSettings(ctx, spec)
 	canon := BuildCanon(spec, outline, characters, settings)
 	plans, err := g.generateChapterPlans(ctx, spec, outline)
 	if err != nil {
 		return Outline{}, nil, nil, err
+	}
+	if g.PersistDir != "" {
+		_ = persistPlans(g.PersistDir, plans)
 	}
 	contents, err := g.generateChapterContentsParallel(ctx, spec, canon, plans)
 	if err != nil {
@@ -161,7 +206,7 @@ func (g *Generator) GenerateFromSource(ctx context.Context, spec Spec, source st
 
 func (g *Generator) parseOutlineFromText(ctx context.Context, spec Spec, source string) (Outline, error) {
 	sys := "你是资深小说大纲抽取专家，仅输出JSON"
-	user := "从以下文本抽取小说大纲，返回JSON：{title, chapters:[{index,title,summary}]}；仅输出JSON。\n" + source
+	user := "从以下文本抽取小说大纲，返回JSON：{title, chapters:[{index,title,summary}]}；仅输出JSON。要求：每个chapter仅代表单独一章；index严格为单个数字，不得包含范围表达（如1-30章）；不得卷级汇总，每条仅一章。\n" + source
 	out, err := g.Client.Chat(ctx, spec.Model, sys, user)
 	if err != nil {
 		return Outline{}, err
@@ -196,6 +241,12 @@ func (g *Generator) parseOutlineFromText(ctx context.Context, spec Spec, source 
 	}
 	for i := range outline.Chapters {
 		outline.Chapters[i].Index = i + 1
+	}
+	if spec.Chapters > 0 && len(outline.Chapters) != spec.Chapters {
+		normalized, e := g.normalizeOutline(ctx, spec, outline, source)
+		if e == nil && len(normalized.Chapters) == spec.Chapters {
+			outline = normalized
+		}
 	}
 	return outline, nil
 }
@@ -253,7 +304,7 @@ func (g *Generator) generateOutline(ctx context.Context, spec Spec) (Outline, er
 	if chCount <= 0 {
 		chCount = 10
 	}
-	user := fmt.Sprintf("基于主题生成小说大纲，章节数%d，返回JSON：{title, chapters:[{index,title,summary}]}; 仅输出JSON，不要任何额外说明或标注。主题：%s", chCount, spec.Topic)
+	user := fmt.Sprintf("基于主题生成小说大纲，章节数%d，返回JSON：{title, chapters:[{index,title,summary}]}; 仅输出JSON，不要任何额外说明或标注；每项仅单章，禁止范围表达（如1-30章）。主题：%s", chCount, spec.Topic)
 	out, err := g.Client.Chat(ctx, spec.Model, sys, user)
 	if err != nil {
 		return Outline{}, err
@@ -346,6 +397,9 @@ func (g *Generator) generateChapterContentsParallelWithCallback(ctx context.Cont
 			return nil, err
 		}
 		contents[i] = ChapterContent{Index: plans[i].Index, Title: plans[i].Title, Content: out}
+		if g.PersistDir != "" {
+			_ = persistChapter(g.PersistDir, canon.Title, contents[i])
+		}
 		if onChapter != nil {
 			onChapter(contents[i])
 		}
@@ -532,8 +586,8 @@ func (g *Generator) extractOutlineChunked(ctx context.Context, spec Spec, source
 	var all []frag
 	title := spec.Topic
 	for i, c := range chunks {
-		sys := "你是资深小说大纲抽取专家，仅输出JSON数组"
-		user := "从以下文本片段抽取章节列表，返回JSON数组：[{title,summary}]；仅输出JSON数组。\n片段：\n" + c
+		sys := "你是资深小说大纲拆解专家，仅输出JSON数组"
+		user := "将以下文本片段拆解为逐章列表，返回JSON数组：[{title,summary}]；仅输出JSON数组。要求：每项仅代表单独一章，不得卷级汇总或范围表达（如1-30章）。\n片段：\n" + c
 		out, err := g.Client.Chat(ctx, spec.Model, sys, user)
 		if err != nil {
 			return Outline{}, err
@@ -559,6 +613,38 @@ func (g *Generator) extractOutlineChunked(ctx context.Context, spec Spec, source
 	}
 	if len(outline.Chapters) == 0 {
 		return Outline{}, fmt.Errorf("无法从大文本抽取大纲")
+	}
+	if spec.Chapters > 0 && len(outline.Chapters) != spec.Chapters {
+		normalized, e := g.normalizeOutline(ctx, spec, outline, source)
+		if e == nil && len(normalized.Chapters) == spec.Chapters {
+			return normalized, nil
+		}
+	}
+	return outline, nil
+}
+
+func (g *Generator) normalizeOutline(ctx context.Context, spec Spec, current Outline, source string) (Outline, error) {
+	sys := "你是资深大纲拆解与扩展专家，仅输出JSON"
+	b := strings.Builder{}
+	b.WriteString("将以下材料与现有大纲统一，扩展为精确 ")
+	b.WriteString(fmt.Sprintf("%d", spec.Chapters))
+	b.WriteString(" 章，严格输出：{title, chapters:[{index,title,summary}]}。要求：index 从1到")
+	b.WriteString(fmt.Sprintf("%d", spec.Chapters))
+	b.WriteString("，每项仅单章；禁止范围表达如‘1-30章’；不得合并多章至一项；仅输出JSON。\n材料：\n")
+	b.WriteString(source)
+	b.WriteString("\n现有大纲JSON：\n")
+	curJSON, _ := json.Marshal(current)
+	b.Write(curJSON)
+	out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
+	if err != nil {
+		return Outline{}, err
+	}
+	var outline Outline
+	if e := json.Unmarshal([]byte(extractJSON(out)), &outline); e != nil {
+		return Outline{}, e
+	}
+	for i := range outline.Chapters {
+		outline.Chapters[i].Index = i + 1
 	}
 	return outline, nil
 }
@@ -667,6 +753,57 @@ func chunkTextByParagraph(s string, max int) []string {
 		}
 	}
 	return chunks
+}
+
+func persistOutline(dir string, outline Outline) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(outline, "", "  ")
+	return os.WriteFile(filepath.Join(dir, "outline.json"), b, 0o644)
+}
+
+func persistCharacters(dir string, characters []Character) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(characters, "", "  ")
+	return os.WriteFile(filepath.Join(dir, "characters.json"), b, 0o644)
+}
+
+func persistPlans(dir string, plans []Chapter) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(plans, "", "  ")
+	return os.WriteFile(filepath.Join(dir, "plans.json"), b, 0o644)
+}
+
+func persistChapter(dir string, title string, c ChapterContent) error {
+	if dir == "" {
+		return nil
+	}
+	chapDir := filepath.Join(dir, "chapters")
+	if err := os.MkdirAll(chapDir, 0o755); err != nil {
+		return err
+	}
+	fname := fmt.Sprintf("%02d_%s.md", c.Index, safeFileName(c.Title))
+	path := filepath.Join(chapDir, fname)
+	body := strings.Builder{}
+	body.WriteString("# ")
+	body.WriteString(c.Title)
+	body.WriteString("\n\n")
+	body.WriteString(c.Content)
+	return os.WriteFile(path, []byte(body.String()), 0o644)
 }
 
 func safeFileName(s string) string {
