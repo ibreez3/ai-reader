@@ -37,6 +37,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
+            type=sha,format=short,prefix=commit-
             type=sha
             type=ref,event=tag
             type=ref,event=branch,prefix=branch-

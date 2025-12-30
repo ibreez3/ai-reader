@@ -167,8 +167,32 @@ func (g *Generator) parseOutlineFromText(ctx context.Context, spec Spec, source 
 		return Outline{}, err
 	}
 	var outline Outline
-	if err := json.Unmarshal([]byte(extractJSON(out)), &outline); err != nil {
-		return Outline{}, err
+	j := extractJSON(out)
+	if e := json.Unmarshal([]byte(j), &outline); e != nil {
+		if g.Log != nil {
+			g.Log("[抽取大纲失败] " + e.Error())
+		}
+		// 强制要求代码块JSON重试
+		user = "```json\n仅输出完整JSON，无额外文本。结构：{\"title\":...,\"chapters\":[{\"index\":1,\"title\":...,\"summary\":...}]}\n```\n文本：\n" + source
+		out2, err2 := g.Client.Chat(ctx, spec.Model, sys, user)
+		if err2 != nil {
+			// 大文本分片增量抽取
+			chOutline, e2 := g.extractOutlineChunked(ctx, spec, source)
+			if e2 != nil {
+				return Outline{}, err2
+			}
+			outline = chOutline
+		} else {
+			j2 := extractJSON(out2)
+			if err := json.Unmarshal([]byte(j2), &outline); err != nil {
+				// 大文本分片增量抽取
+				chOutline, e2 := g.extractOutlineChunked(ctx, spec, source)
+				if e2 != nil {
+					return Outline{}, err
+				}
+				outline = chOutline
+			}
+		}
 	}
 	for i := range outline.Chapters {
 		outline.Chapters[i].Index = i + 1
@@ -189,8 +213,36 @@ func (g *Generator) parseCharactersFromText(ctx context.Context, spec Spec, sour
 		return nil, err
 	}
 	var characters []Character
-	if err := json.Unmarshal([]byte(extractJSON(out)), &characters); err != nil {
-		return nil, err
+	j := extractJSON(out)
+	if e := json.Unmarshal([]byte(j), &characters); e != nil {
+		if g.Log != nil {
+			g.Log("[抽取人物失败] " + e.Error())
+		}
+		// 代码块JSON重试
+		b2 := strings.Builder{}
+		b2.WriteString("```json\n仅输出JSON数组，无额外文本。结构：[{\"name\":...,\"role\":...,\"traits\":[...],\"background\":...}]\n```\n标题：")
+		b2.WriteString(outline.Title)
+		b2.WriteString("\n文本：\n")
+		b2.WriteString(source)
+		out2, err2 := g.Client.Chat(ctx, spec.Model, sys, b2.String())
+		if err2 != nil {
+			// 分片增量抽取
+			chChars, e2 := g.extractCharactersChunked(ctx, spec, source, outline)
+			if e2 != nil {
+				return nil, err2
+			}
+			characters = chChars
+		} else {
+			j2 := extractJSON(out2)
+			if err := json.Unmarshal([]byte(j2), &characters); err != nil {
+				// 分片增量抽取
+				chChars, e2 := g.extractCharactersChunked(ctx, spec, source, outline)
+				if e2 != nil {
+					return nil, err
+				}
+				characters = chChars
+			}
+		}
 	}
 	return characters, nil
 }
@@ -456,7 +508,165 @@ func extractJSON(s string) string {
 	if end != -1 && end > start {
 		return s[start:end]
 	}
+	// 回退：尝试找到最后的闭合括号，截断到该位置
+	lastCloseObj := strings.LastIndexByte(s, '}')
+	lastCloseArr := strings.LastIndexByte(s, ']')
+	last := lastCloseObj
+	if lastCloseArr > last {
+		last = lastCloseArr
+	}
+	if last > start {
+		return s[start : last+1]
+	}
 	return s[start:]
+}
+
+// -------- 大文本分片支持 --------
+
+func (g *Generator) extractOutlineChunked(ctx context.Context, spec Spec, source string) (Outline, error) {
+	chunks := chunkTextByParagraph(source, 8000)
+	type frag struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	}
+	var all []frag
+	title := spec.Topic
+	for i, c := range chunks {
+		sys := "你是资深小说大纲抽取专家，仅输出JSON数组"
+		user := "从以下文本片段抽取章节列表，返回JSON数组：[{title,summary}]；仅输出JSON数组。\n片段：\n" + c
+		out, err := g.Client.Chat(ctx, spec.Model, sys, user)
+		if err != nil {
+			return Outline{}, err
+		}
+		var fr []frag
+		if e := json.Unmarshal([]byte(extractJSON(out)), &fr); e != nil {
+			if g.Log != nil {
+				g.Log(fmt.Sprintf("[分片大纲失败] chunk=%d err=%s", i, e.Error()))
+			}
+			continue
+		}
+		if i == 0 && title == "" {
+			// 从首片段尝试提取标题
+			if len(fr) > 0 && fr[0].Title != "" {
+				title = fr[0].Title
+			}
+		}
+		all = append(all, fr...)
+	}
+	outline := Outline{Title: title}
+	for i, f := range all {
+		outline.Chapters = append(outline.Chapters, Chapter{Index: i + 1, Title: f.Title, Summary: f.Summary})
+	}
+	if len(outline.Chapters) == 0 {
+		return Outline{}, fmt.Errorf("无法从大文本抽取大纲")
+	}
+	return outline, nil
+}
+
+func (g *Generator) extractCharactersChunked(ctx context.Context, spec Spec, source string, outline Outline) ([]Character, error) {
+	chunks := chunkTextByParagraph(source, 8000)
+	dedup := map[string]Character{}
+	for i, c := range chunks {
+		sys := "你是资深人物设定抽取专家，仅输出JSON数组"
+		b := strings.Builder{}
+		b.WriteString("从以下文本片段抽取主要人物，返回JSON数组[{name,role,traits,background}]；仅输出JSON数组。\n标题：")
+		b.WriteString(outline.Title)
+		b.WriteString("\n片段：\n")
+		b.WriteString(c)
+		out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
+		if err != nil {
+			return nil, err
+		}
+		var chars []Character
+		if e := json.Unmarshal([]byte(extractJSON(out)), &chars); e != nil {
+			if g.Log != nil {
+				g.Log(fmt.Sprintf("[分片人物失败] chunk=%d err=%s", i, e.Error()))
+			}
+			continue
+		}
+		for _, ch := range chars {
+			if ch.Name == "" {
+				continue
+			}
+			if old, ok := dedup[ch.Name]; ok {
+				// 合并traits与背景
+				merged := mergeCharacters(old, ch)
+				dedup[ch.Name] = merged
+			} else {
+				dedup[ch.Name] = ch
+			}
+		}
+	}
+	res := make([]Character, 0, len(dedup))
+	for _, v := range dedup {
+		res = append(res, v)
+	}
+	if len(res) == 0 {
+		return nil, fmt.Errorf("无法从大文本抽取人物")
+	}
+	return res, nil
+}
+
+func mergeCharacters(a, b Character) Character {
+	// 合并traits
+	mm := map[string]struct{}{}
+	var t []string
+	for _, x := range []string(a.Traits) {
+		if _, ok := mm[x]; !ok && x != "" {
+			mm[x] = struct{}{}
+			t = append(t, x)
+		}
+	}
+	for _, x := range []string(b.Traits) {
+		if _, ok := mm[x]; !ok && x != "" {
+			mm[x] = struct{}{}
+			t = append(t, x)
+		}
+	}
+	a.Traits = StringList(t)
+	// 背景与角色以更长的为准
+	if len(b.Background) > len(a.Background) {
+		a.Background = b.Background
+	}
+	if len(b.Role) > len(a.Role) {
+		a.Role = b.Role
+	}
+	return a
+}
+
+func chunkTextByParagraph(s string, max int) []string {
+	if max <= 0 {
+		max = 8000
+	}
+	parts := strings.Split(s, "\n\n")
+	var chunks []string
+	cur := strings.Builder{}
+	for _, p := range parts {
+		if cur.Len()+len(p)+2 > max {
+			if cur.Len() > 0 {
+				chunks = append(chunks, cur.String())
+				cur.Reset()
+			}
+		}
+		if cur.Len() > 0 {
+			cur.WriteString("\n\n")
+		}
+		cur.WriteString(p)
+	}
+	if cur.Len() > 0 {
+		chunks = append(chunks, cur.String())
+	}
+	// 若仍为空，直接按硬分割
+	if len(chunks) == 0 && len(s) > 0 {
+		for i := 0; i < len(s); i += max {
+			end := i + max
+			if end > len(s) {
+				end = len(s)
+			}
+			chunks = append(chunks, s[i:end])
+		}
+	}
+	return chunks
 }
 
 func safeFileName(s string) string {

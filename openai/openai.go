@@ -24,6 +24,7 @@ func NewClient(apiKey string, baseURL string) *Client {
 func (c *Client) Chat(ctx context.Context, model string, system string, user string) (string, error) {
 	res, err := c.cli.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: model,
+		
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.SystemMessage(system),
 			openai.UserMessage(user),
