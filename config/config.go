@@ -9,18 +9,22 @@ import (
 )
 
 type Config struct {
-	Server struct {
-		Port int `yaml:"port"`
-	} `yaml:"server"`
-	OpenAI struct {
-		BaseURL   string `yaml:"base_url"`
-		Model     string `yaml:"model"`
-		APIKeyEnv string `yaml:"api_key_env"`
-		APIKey    string `yaml:"-"`
-	} `yaml:"openai"`
-	Output struct {
-		Dir string `yaml:"dir"`
-	} `yaml:"output"`
+    Server struct {
+        Port int `yaml:"port"`
+        JobTimeoutMin int `yaml:"job_timeout_min"`
+    } `yaml:"server"`
+    OpenAI struct {
+        BaseURL   string `yaml:"base_url"`
+        Model     string `yaml:"model"`
+        APIKeyEnv string `yaml:"api_key_env"`
+        APIKey    string `yaml:"-"`
+        RequestTimeoutSec int `yaml:"request_timeout_sec"`
+        MaxRetries        int `yaml:"max_retries"`
+        RetryBackoffMs    int `yaml:"retry_backoff_ms"`
+    } `yaml:"openai"`
+    Output struct {
+        Dir string `yaml:"dir"`
+    } `yaml:"output"`
 }
 
 func Load(path string) (Config, error) {
@@ -40,13 +44,17 @@ func Load(path string) (Config, error) {
 	if cfg.OpenAI.APIKey == "" {
 		return cfg, fmt.Errorf("missing OpenAI API key in env %s", envName)
 	}
-	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
-	}
-	if cfg.Output.Dir == "" {
-		cfg.Output.Dir = "output"
-	}
-	return cfg, nil
+    if cfg.Server.Port == 0 {
+        cfg.Server.Port = 8080
+    }
+    if cfg.Server.JobTimeoutMin == 0 { cfg.Server.JobTimeoutMin = 60 }
+    if cfg.Output.Dir == "" {
+        cfg.Output.Dir = "output"
+    }
+    if cfg.OpenAI.RequestTimeoutSec == 0 { cfg.OpenAI.RequestTimeoutSec = 120 }
+    if cfg.OpenAI.MaxRetries == 0 { cfg.OpenAI.MaxRetries = 3 }
+    if cfg.OpenAI.RetryBackoffMs == 0 { cfg.OpenAI.RetryBackoffMs = 1500 }
+    return cfg, nil
 }
 
 func parseYAMLConfig(cfg *Config, s string) error {
@@ -68,27 +76,35 @@ func parseYAMLConfig(cfg *Config, s string) error {
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
 		val = strings.Trim(val, "\"')")
-		switch section {
-		case "server":
-			if key == "port" {
-				if p, err := strconv.Atoi(val); err == nil {
-					cfg.Server.Port = p
-				}
-			}
-		case "openai":
-			switch key {
-			case "base_url":
-				cfg.OpenAI.BaseURL = val
-			case "model":
-				cfg.OpenAI.Model = val
-			case "api_key_env":
-				cfg.OpenAI.APIKeyEnv = val
-			}
-		case "output":
-			if key == "dir" {
-				cfg.Output.Dir = val
-			}
-		}
-	}
-	return nil
+        switch section {
+        case "server":
+            if key == "port" {
+                if p, err := strconv.Atoi(val); err == nil {
+                    cfg.Server.Port = p
+                }
+            } else if key == "job_timeout_min" {
+                if p, err := strconv.Atoi(val); err == nil { cfg.Server.JobTimeoutMin = p }
+            }
+        case "openai":
+            switch key {
+            case "base_url":
+                cfg.OpenAI.BaseURL = val
+            case "model":
+                cfg.OpenAI.Model = val
+            case "api_key_env":
+                cfg.OpenAI.APIKeyEnv = val
+            case "request_timeout_sec":
+                if p, err := strconv.Atoi(val); err == nil { cfg.OpenAI.RequestTimeoutSec = p }
+            case "max_retries":
+                if p, err := strconv.Atoi(val); err == nil { cfg.OpenAI.MaxRetries = p }
+            case "retry_backoff_ms":
+                if p, err := strconv.Atoi(val); err == nil { cfg.OpenAI.RetryBackoffMs = p }
+            }
+        case "output":
+            if key == "dir" {
+                cfg.Output.Dir = val
+            }
+        }
+    }
+    return nil
 }

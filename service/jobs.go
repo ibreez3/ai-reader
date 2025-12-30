@@ -84,12 +84,16 @@ func (m *Manager) runJob(cfg config.Config, spec novel.Spec, j *Job) {
         gen.WithLogger(jl.Log)
     }
     gen.WithPersistDir(j.WorkDir)
-    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+    timeoutMin := cfg.Server.JobTimeoutMin
+    if timeoutMin <= 0 { timeoutMin = 60 }
+    ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMin)*time.Minute)
     defer cancel()
     merged := mergeSpecDefaults(cfg, spec)
     if jl != nil {
         jl.Log(fmt.Sprintf("[参数] topic=%s chapters=%d words=%d model=%s preset=%s", merged.Topic, merged.Chapters, merged.Words, merged.Model, merged.Preset))
     }
+    gen.WithPersistDir(j.WorkDir)
+    gen.WithRequestPolicy(cfg.OpenAI.RequestTimeoutSec, cfg.OpenAI.MaxRetries, cfg.OpenAI.RetryBackoffMs)
     outline, _, contents, err := gen.GenerateWithProgress(ctx, merged, func(idx int, ch novel.ChapterContent) {
         j.Completed++
         j.UpdatedAt = time.Now()

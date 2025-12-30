@@ -7,17 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/ibreez3/ai-reader/openai"
+	"time"
 )
 
 type Generator struct {
-	Client     *openai.Client
-	Log        func(string)
-	PersistDir string
+	Client            ChatClient
+	Log               func(string)
+	PersistDir        string
+	RequestTimeoutSec int
+	RetryCount        int
+	RetryBackoffMs    int
 }
 
-func NewGenerator(cli *openai.Client) *Generator {
+func NewGenerator(cli ChatClient) *Generator {
 	return &Generator{Client: cli}
 }
 
@@ -28,6 +30,19 @@ func (g *Generator) WithLogger(log func(string)) *Generator {
 
 func (g *Generator) WithPersistDir(dir string) *Generator {
 	g.PersistDir = dir
+	return g
+}
+
+func (g *Generator) WithRequestPolicy(timeoutSec, retries, backoffMs int) *Generator {
+	if timeoutSec > 0 {
+		g.RequestTimeoutSec = timeoutSec
+	}
+	if retries > 0 {
+		g.RetryCount = retries
+	}
+	if backoffMs > 0 {
+		g.RetryBackoffMs = backoffMs
+	}
 	return g
 }
 
@@ -207,7 +222,15 @@ func (g *Generator) GenerateFromSource(ctx context.Context, spec Spec, source st
 func (g *Generator) parseOutlineFromText(ctx context.Context, spec Spec, source string) (Outline, error) {
 	sys := "你是资深小说大纲抽取专家，仅输出JSON"
 	user := "从以下文本抽取小说大纲，返回JSON：{title, chapters:[{index,title,summary}]}；仅输出JSON。要求：每个chapter仅代表单独一章；index严格为单个数字，不得包含范围表达（如1-30章）；不得卷级汇总，每条仅一章。\n" + source
-	out, err := g.Client.Chat(ctx, spec.Model, sys, user)
+	reqCtx := ctx
+	var cancel func()
+	if g.RequestTimeoutSec > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+	}
+	out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, user, g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+	if cancel != nil {
+		cancel()
+	}
 	if err != nil {
 		return Outline{}, err
 	}
@@ -259,7 +282,15 @@ func (g *Generator) parseCharactersFromText(ctx context.Context, spec Spec, sour
 	b.WriteString(outline.Title)
 	b.WriteString("\n文本：\n")
 	b.WriteString(source)
-	out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
+	reqCtx := ctx
+	var cancel func()
+	if g.RequestTimeoutSec > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+	}
+	out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, b.String(), g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+	if cancel != nil {
+		cancel()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +393,15 @@ func (g *Generator) generateChapterPlans(ctx context.Context, spec Spec, outline
 		b.WriteString("\n章节：")
 		b.WriteString(fmt.Sprintf("%d. %s - %s", ch.Index, ch.Title, ch.Summary))
 	}
-	out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
+	reqCtx := ctx
+	var cancel func()
+	if g.RequestTimeoutSec > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+	}
+	out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, b.String(), g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+	if cancel != nil {
+		cancel()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +431,15 @@ func (g *Generator) generateChapterContentsParallelWithCallback(ctx context.Cont
 			g.Log(fmt.Sprintf("[章节参与] 第%d章 %s | 人物：%s", plans[i].Index, plans[i].Title, strings.Join(names, ", ")))
 		}
 		sys, user := BuildChapterPrompt(canon, plans[i], relevant, spec.Words, spec.Instruction, spec.System)
-		out, err := g.Client.Chat(ctx, spec.Model, sys, user)
+		reqCtx := ctx
+		var cancel func()
+		if g.RequestTimeoutSec > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+		}
+		out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, user, g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -588,7 +635,15 @@ func (g *Generator) extractOutlineChunked(ctx context.Context, spec Spec, source
 	for i, c := range chunks {
 		sys := "你是资深小说大纲拆解专家，仅输出JSON数组"
 		user := "将以下文本片段拆解为逐章列表，返回JSON数组：[{title,summary}]；仅输出JSON数组。要求：每项仅代表单独一章，不得卷级汇总或范围表达（如1-30章）。\n片段：\n" + c
-		out, err := g.Client.Chat(ctx, spec.Model, sys, user)
+		reqCtx := ctx
+		var cancel func()
+		if g.RequestTimeoutSec > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+		}
+		out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, user, g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
 			return Outline{}, err
 		}
@@ -659,7 +714,15 @@ func (g *Generator) extractCharactersChunked(ctx context.Context, spec Spec, sou
 		b.WriteString(outline.Title)
 		b.WriteString("\n片段：\n")
 		b.WriteString(c)
-		out, err := g.Client.Chat(ctx, spec.Model, sys, b.String())
+		reqCtx := ctx
+		var cancel func()
+		if g.RequestTimeoutSec > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+		}
+		out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, b.String(), g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
 			return nil, err
 		}
