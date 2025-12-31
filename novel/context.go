@@ -110,7 +110,74 @@ func BuildChapterPrompt(c Canon, plan Chapter, relevant []Character, words int, 
 	}
 	b.WriteString("\n人性化要求：\n")
 	b.WriteString(humanizeGuidelines())
-	return sys, b.String()
+    return sys, b.String()
+}
+
+func BuildChapterPromptWithHistory(c Canon, plan Chapter, relevant []Character, words int, extra string, system string, history []ChapterContent) (string, string) {
+    sys := system
+    if sys == "" {
+        sys = "你是资深中文小说写作助手，严格遵守风格与世界观"
+    }
+    b := strings.Builder{}
+    b.WriteString("风格：")
+    b.WriteString(c.Style)
+    b.WriteString("\n标题：")
+    b.WriteString(c.Title)
+    b.WriteString("\n章节：")
+    b.WriteString(plan.Title)
+    b.WriteString("\n梗概：")
+    b.WriteString(plan.Summary)
+    if len(relevant) > 0 {
+        b.WriteString("\n人物：\n")
+        for _, r := range relevant {
+            b.WriteString(r.Name)
+            b.WriteString("|")
+            b.WriteString(r.Role)
+            b.WriteString("|")
+            b.WriteString(strings.Join([]string(r.Traits), "、"))
+            b.WriteString("|")
+            b.WriteString(r.Background)
+            b.WriteString("\n")
+        }
+    }
+    if c.Settings.GoldenFinger.Name != "" {
+        b.WriteString("\n设定：\n")
+        b.WriteString("主角：")
+        b.WriteString(c.Settings.Protagonist.Personality)
+        b.WriteString("|")
+        b.WriteString(c.Settings.Protagonist.Background)
+        b.WriteString("|")
+        b.WriteString(c.Settings.Protagonist.Goal)
+        b.WriteString("\n金手指：")
+        b.WriteString(c.Settings.GoldenFinger.Name)
+        b.WriteString("|")
+        b.WriteString(c.Settings.GoldenFinger.Activation)
+        b.WriteString("|")
+        b.WriteString(c.Settings.GoldenFinger.Initial)
+        b.WriteString("|")
+        b.WriteString(c.Settings.GoldenFinger.Upgrade)
+        b.WriteString("|")
+        b.WriteString(c.Settings.GoldenFinger.Limit)
+    }
+    if len(history) > 0 {
+        b.WriteString("\n前文摘录：\n")
+        for _, h := range history {
+            b.WriteString(h.Title)
+            b.WriteString("\n")
+            b.WriteString(h.Content)
+            b.WriteString("\n")
+        }
+    }
+    b.WriteString("\n要求：输出该章节完整正文，字数不少于")
+    b.WriteString(strings.TrimSpace(fmtInt(words)))
+    b.WriteString("字，避免与其他章节冲突与重复，保持人物设定与世界观一致")
+    if extra != "" {
+        b.WriteString("\n附加指令：")
+        b.WriteString(extra)
+    }
+    b.WriteString("\n人性化要求：\n")
+    b.WriteString(humanizeGuidelines())
+    return sys, b.String()
 }
 
 func containsWord(s, w string) bool {

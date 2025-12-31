@@ -1,0 +1,351 @@
+openapi: 3.0.3
+info:
+  title: AI Reader Service API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/generate:
+    post:
+      tags:
+        - Generation
+      summary: Create a novel generation job
+      description: Starts a generation job using either a topic or source text/file. Returns a job id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/progress:
+    get:
+      tags:
+        - Generation
+      summary: Get job progress
+      parameters:
+        - in: query
+          name: id
+          schema:
+            type: string
+          required: true
+          description: Job ID
+      responses:
+        '200':
+          description: Progress info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgressResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/result:
+    get:
+      tags:
+        - Generation
+      summary: Get job result directory
+      parameters:
+        - in: query
+          name: id
+          schema:
+            type: string
+          required: true
+          description: Job ID
+      responses:
+        '200':
+          description: Output directory info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not ready or job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/log:
+    get:
+      tags:
+        - Generation
+      summary: Get job log content
+      parameters:
+        - in: query
+          name: id
+          schema:
+            type: string
+          required: true
+          description: Job ID
+      responses:
+        '200':
+          description: Log content
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Log not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/categories:
+    get:
+      tags:
+        - Metadata
+      summary: Get category dictionary
+      responses:
+        '200':
+          description: Category dictionary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+  /api/chapter:
+    post:
+      tags:
+        - Chapter
+      summary: Start async generation of a single chapter using job context and prior chapters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChapterRequest'
+      responses:
+        '200':
+          description: Chapter task started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChapterTaskResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/chapter_status:
+    get:
+      tags:
+        - Chapter
+      summary: Get async chapter generation task status
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Chapter task status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChapterTaskStatusResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    GenerateRequest:
+      type: object
+      properties:
+        topic:
+          type: string
+          description: Novel topic/title (used when not providing source text)
+        chapters:
+          type: integer
+          description: Target number of chapters
+          example: 90
+        words:
+          type: integer
+          description: Target words per chapter
+          example: 2500
+        preset:
+          type: string
+          description: Style preset (e.g., xiyou_shuangwen). Optional; generic setting used otherwise
+        instruction:
+          type: string
+          description: Additional writing instruction applied to all chapters
+        model:
+          type: string
+          description: Model name configured by base URL provider
+        system:
+          type: string
+          description: Custom system prompt; overrides auto-built system for categories/tags
+        source_text:
+          type: string
+          description: Free-form source text containing intro/outline/characters
+        source_path:
+          type: string
+          description: Path inside container to source text file (e.g., /app/instruction.txt)
+        gender:
+          type: string
+          description: Gender orientation (male/female)
+          example: male
+        categories:
+          type: array
+          items:
+            type: string
+          description: Category list to steer style (e.g., 都市脑洞, 悬疑灵异)
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tag list to steer style (e.g., 系统流)
+    GenerateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Job ID
+    ProgressResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        completed:
+          type: integer
+        total:
+          type: integer
+        dir:
+          type: string
+          description: Final output directory (output/<标题>)
+        error:
+          type: string
+        log:
+          type: string
+          description: Job log path (output/jobs/<job-id>.log)
+    ResultResponse:
+      type: object
+      properties:
+        dir:
+          type: string
+        log:
+          type: string
+    ChapterRequest:
+      type: object
+      required: [id, chapter]
+      properties:
+        id:
+          type: string
+          description: Job ID
+        chapter:
+          type: integer
+          minimum: 1
+          description: Chapter index to generate (1-based)
+        words:
+          type: integer
+          description: Target words for this chapter
+        instruction:
+          type: string
+          description: Additional writing instruction for this chapter
+    ChapterResponse:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Path to generated chapter markdown under jobs directory
+    ChapterTaskResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: Chapter task id
+    ChapterTaskStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        path:
+          type: string
+        error:
+          type: string
+    CategoryResponse:
+      type: object
+      properties:
+        male:
+          type: array
+          items:
+            type: string
+        female:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        notes:
+          type: object
+          additionalProperties:
+            type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string

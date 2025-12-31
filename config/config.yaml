@@ -4,5 +4,8 @@ openai:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   model: qwen-plus
   api_key_env: AIREADER_OPENAI_APIKEY
+  request_timeout_sec: 604800
+  max_retries: 4
+  retry_backoff_ms: 20000
 output:
   dir: output

@@ -27,6 +27,13 @@ type GenerateReq struct {
 	Tags        []string `json:"tags"`
 }
 
+type ChapterReq struct {
+	ID          string `json:"id"`
+	Chapter     int    `json:"chapter"`
+	Words       int    `json:"words"`
+	Instruction string `json:"instruction"`
+}
+
 func main() {
 	cfg, err := config.Load("config/config.yaml")
 	if err != nil {
@@ -80,6 +87,47 @@ func main() {
 
 	r.GET("/api/categories", func(c *gin.Context) {
 		c.JSON(http.StatusOK, service.GetCategories())
+	})
+
+	r.POST("/api/chapter", func(c *gin.Context) {
+		var req ChapterReq
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if req.ID == "" || req.Chapter <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing id or chapter"})
+			return
+		}
+		j := mgr.Get(req.ID)
+		if j == nil {
+			if loaded, err := mgr.LoadJobFromDisk(cfg, req.ID); err == nil {
+				j = loaded
+			} else {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+		}
+		t, err := mgr.StartChapterTask(cfg, j, req.Chapter, req.Words, req.Instruction)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"task_id": t.ID})
+	})
+
+	r.GET("/api/chapter_status", func(c *gin.Context) {
+		id := c.Query("id")
+		if id == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing id"})
+			return
+		}
+		t := mgr.GetChapterTask(id)
+		if t == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": t.Status, "path": t.Path, "error": t.Error})
 	})
 
 	r.GET("/api/progress", func(c *gin.Context) {

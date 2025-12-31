@@ -250,6 +250,34 @@ func (g *Generator) GenerateFromSource(ctx context.Context, spec Spec, source st
 	return outline, characters, contents, nil
 }
 
+// GenerateArtifacts produces and persists outline, characters and chapter plans only (no chapter contents)
+func (g *Generator) GenerateArtifacts(ctx context.Context, spec Spec) (Outline, []Character, []Chapter, error) {
+    outline, err := g.generateOutline(ctx, spec)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistOutline(g.PersistDir, outline) }
+    characters, err := g.generateCharacters(ctx, spec, outline)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistCharacters(g.PersistDir, characters) }
+    plans, err := g.generateChapterPlans(ctx, spec, outline)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistPlans(g.PersistDir, plans) }
+    return outline, characters, plans, nil
+}
+
+// GenerateArtifactsFromSource produces and persists outline, characters and chapter plans from source text only
+func (g *Generator) GenerateArtifactsFromSource(ctx context.Context, spec Spec, source string) (Outline, []Character, []Chapter, error) {
+    outline, err := g.parseOutlineFromText(ctx, spec, source)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistOutline(g.PersistDir, outline) }
+    characters, err := g.parseCharactersFromText(ctx, spec, source, outline)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistCharacters(g.PersistDir, characters) }
+    plans, err := g.generateChapterPlans(ctx, spec, outline)
+    if err != nil { return Outline{}, nil, nil, err }
+    if g.PersistDir != "" { _ = persistPlans(g.PersistDir, plans) }
+    return outline, characters, plans, nil
+}
+
 func (g *Generator) parseOutlineFromText(ctx context.Context, spec Spec, source string) (Outline, error) {
 	sys := "你是资深小说大纲抽取专家，仅输出JSON"
 	user := "从以下文本抽取小说大纲，返回JSON：{title, chapters:[{index,title,summary}]}；仅输出JSON。要求：每个chapter仅代表单独一章；index严格为单个数字，不得包含范围表达（如1-30章）；不得卷级汇总，每条仅一章。\n" + source
@@ -488,6 +516,33 @@ func (g *Generator) generateChapterContentsParallelWithCallback(ctx context.Cont
 		}
 	}
 	return contents, nil
+}
+
+func (g *Generator) GenerateChapterWithHistory(ctx context.Context, spec Spec, canon Canon, plan Chapter, prior []ChapterContent) (ChapterContent, error) {
+	relevant := SelectRelevantCharacters(plan, canon.Characters, 3)
+	sys, user := BuildChapterPromptWithHistory(canon, plan, relevant, spec.Words, spec.Instruction, spec.System, prior)
+	reqCtx := ctx
+	var cancel func()
+	if g.RequestTimeoutSec > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(g.RequestTimeoutSec)*time.Second)
+	}
+	out, err := g.Client.ChatWithRetry(reqCtx, spec.Model, sys, user, g.RetryCount, time.Duration(g.RetryBackoffMs)*time.Millisecond)
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil {
+		return ChapterContent{}, err
+	}
+	c := ChapterContent{Index: plan.Index, Title: plan.Title, Content: out}
+	if g.PersistDir != "" {
+		_ = persistChapter(g.PersistDir, canon.Title, c)
+	}
+	if g.FinalBaseDir != "" {
+		finalDir := filepath.Join(g.FinalBaseDir, safeDirName(canon.Title))
+		_ = os.MkdirAll(finalDir, 0o755)
+		_ = writeChapterToDir(finalDir, c)
+	}
+	return c, nil
 }
 
 func WriteToFiles(baseDir string, outline Outline, contents []ChapterContent) (string, error) {
